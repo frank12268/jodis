@@ -37,10 +37,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.curator.framework.api.CuratorEvent;
+import org.apache.curator.framework.api.CuratorListener;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
+import org.apache.curator.framework.state.ConnectionState;
+import org.apache.curator.framework.state.ConnectionStateListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -153,6 +157,24 @@ public class RoundRobinJedisPool implements JedisResourcePool {
             close();
             throw new JedisException(e);
         }
+        /*
+        curatorClient.getConnectionStateListenable().addListener(new ConnectionStateListener() {
+            private void logEvent(ConnectionState connectionState) {
+                StringBuilder msg = new StringBuilder("Receive connection state event: ");
+                msg.append("name=").append(connectionState.name());
+                msg.append(", isConnected=").append(connectionState.isConnected());
+                LOG.info(msg.toString());
+            }
+
+            @Override
+            public void stateChanged(CuratorFramework curatorFramework, ConnectionState connectionState) {
+                logEvent(connectionState);
+                if (connectionState.isConnected()) {
+                    resetPools();
+                }
+            }
+        });
+        */
         resetPools();
     }
 
@@ -224,6 +246,10 @@ public class RoundRobinJedisPool implements JedisResourcePool {
         }
     }
 
+    public int getPoolSize() {
+        return this.pools.size();
+    }
+
     /**
      * Create a {@link RoundRobinJedisPool} using the fluent style api.
      * 
@@ -244,6 +270,8 @@ public class RoundRobinJedisPool implements JedisResourcePool {
         private String zkAddr;
 
         private int zkSessionTimeoutMs;
+
+        private int zkConnectionTimeoutMs = -1;
 
         private JedisPoolConfig poolConfig;
 
@@ -299,6 +327,26 @@ public class RoundRobinJedisPool implements JedisResourcePool {
         public Builder curatorClient(String zkAddr, int zkSessionTimeoutMs) {
             this.zkAddr = zkAddr;
             this.zkSessionTimeoutMs = zkSessionTimeoutMs;
+            return this;
+        }
+
+        /**
+         * Set curator client.
+         * <p>
+         * We will create curator client based on these parameters and close it
+         * while closing pool.
+         *
+         * @param zkAddr
+         *            ZooKeeper connect string. e.g., "zk1:2181"
+         * @param zkSessionTimeoutMs
+         *            ZooKeeper session timeout in milliseconds
+         * @param zkConnectionTimeoutMs
+         *            ZooKeeper connection timeout in milliseconds
+         */
+        public Builder curatorClient(String zkAddr, int zkSessionTimeoutMs, int zkConnectionTimeoutMs) {
+            this.zkAddr = zkAddr;
+            this.zkSessionTimeoutMs = zkSessionTimeoutMs;
+            this.zkConnectionTimeoutMs = zkConnectionTimeoutMs;
             return this;
         }
 
@@ -373,11 +421,14 @@ public class RoundRobinJedisPool implements JedisResourcePool {
             Preconditions.checkNotNull(zkProxyDir, "zkProxyDir can not be null");
             if (curatorClient == null) {
                 Preconditions.checkNotNull(zkAddr, "zk client can not be null");
-                curatorClient = CuratorFrameworkFactory.builder().connectString(zkAddr)
+                CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder().connectString(zkAddr)
                         .sessionTimeoutMs(zkSessionTimeoutMs)
                         .retryPolicy(new BoundedExponentialBackoffRetryUntilElapsed(
-                                CURATOR_RETRY_BASE_SLEEP_MS, CURATOR_RETRY_MAX_SLEEP_MS, -1L))
-                        .build();
+                                CURATOR_RETRY_BASE_SLEEP_MS, CURATOR_RETRY_MAX_SLEEP_MS, -1L));
+                if (zkConnectionTimeoutMs>0) {
+                    builder.connectionTimeoutMs(zkConnectionTimeoutMs);
+                }
+                curatorClient = builder.build();
                 curatorClient.start();
                 closeCurator = true;
             } else {
@@ -400,4 +451,20 @@ public class RoundRobinJedisPool implements JedisResourcePool {
                     connectionTimeoutMs, soTimeoutMs, password, database, clientName);
         }
     }
+
+    public static void main(String[] args) throws Exception {
+        String zkAddress = "elsaphb00:2181";
+        String zkProxyDir = "/lzhtest";
+        RoundRobinJedisPool jodisPool = RoundRobinJedisPool.create().curatorClient(zkAddress, 5000, 5000)
+                .timeoutMs(5000).zkProxyDir(zkProxyDir).build();
+        while (true) {
+            try {
+                System.out.println(String.format("#pool_size = %d", jodisPool.getPoolSize()));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            Thread.sleep(5000);
+        }
+    }
+
 }

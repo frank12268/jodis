@@ -24,7 +24,11 @@
  */
 package io.codis.jodis;
 
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.exceptions.JedisException;
+
 import java.io.IOException;
+import java.net.ServerSocket;
 
 /**
  * @author Apache9
@@ -47,6 +51,24 @@ public class RedisServer {
     public void stop() {
         if (process != null) {
             process.destroy();
+        }
+    }
+
+    public static int probeFreePort() throws IOException {
+        try (ServerSocket ss = new ServerSocket(0)) {
+            ss.setReuseAddress(true);
+            return ss.getLocalPort();
+        }
+    }
+
+    public static void waitUntilRedisStarted(String host, int port) throws InterruptedException {
+        for (;;) {
+            try (Jedis jedis = new Jedis(host, port)) {
+                if ("PONG".equals(jedis.ping())) {
+                    break;
+                }
+            } catch (JedisException e) {}
+            Thread.sleep(100);
         }
     }
 }
